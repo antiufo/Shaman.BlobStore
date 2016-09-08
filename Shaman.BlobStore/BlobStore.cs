@@ -70,6 +70,7 @@ namespace Shaman.Runtime
 
         public static void SetConfigurationForDirectory(string directory, int packageSizeApproxKB)
         {
+            if (directory == null) throw new ArgumentNullException();
             directory = Path.GetFullPath(directory);
             var d = GetDirectory(directory);
 
@@ -86,6 +87,44 @@ namespace Shaman.Runtime
         {
             var store = AcquireAndWriteHeader(path);
             return store.OpenWrite(false);
+        }
+
+        public static IEnumerable<string> GetOpenDirectories()
+        {
+            lock (_lock)
+            {
+                return directories.Keys.ToList();
+            }
+        }
+
+        public static void CloseDirectory(string path)
+        {
+            if (path == null) throw new ArgumentNullException();
+            lock (_lock)
+            {
+                path = Path.GetFullPath(path);
+
+                Debug.Assert(path[0] == '/' || path[1] == ':');
+                path = path.TrimEnd(trimChars);
+                PackageDirectory dir;
+                directories.TryGetValue(path, out dir);
+                if (dir != null)
+                {
+                    dir.Flush(true);
+                    directories.Remove(path);
+                    foreach (var b in dir.busyPackages.Union(dir.availablePackages))
+                    {
+                        b.directory = null;
+                        b.fileName = null;
+                        b.ms?.Dispose();
+                        b.ms = null;
+                    }
+                    dir.availablePackages = null;
+                    dir.busyPackages = null;
+                    dir.locations = null;
+                    dir.locationsToAdd = null;
+                }
+            }
         }
 
         public class Blob
@@ -138,21 +177,37 @@ namespace Shaman.Runtime
             }
         }
 
+        public static IEnumerable<Blob> EnumerateFiles(Stream package)
+        {
+            if (!package.CanSeek) package = new UnseekableStreamWrapper(package, package.Length);
+            return EnumerateFiles(package, includeDeleted: false);
+        }
+        public static IEnumerable<Blob> EnumerateFiles(Stream package, bool includeDeleted)
+        {
+            if (!package.CanSeek) package = new UnseekableStreamWrapper(package, package.Length);
+            return EnumerateFiles(null, includeDeleted: includeDeleted, orderByDate: false, singlePackage: package);
+        }
+        public static IEnumerable<Blob> EnumerateFiles(Stream package, bool includeDeleted, long packageLength)
+        {
+            if (!package.CanSeek) package = new UnseekableStreamWrapper(package, packageLength);
+            return EnumerateFiles(null, includeDeleted: includeDeleted, orderByDate: false, singlePackage: package);
+        }
+
         public static IEnumerable<Blob> EnumerateFiles(string directory)
         {
-            return EnumerateFiles(directory, includeDeleted: false, orderByDate:false);
+            return EnumerateFiles(directory, includeDeleted: false, orderByDate: false, singlePackage: null);
         }
         public static IEnumerable<Blob> EnumerateFiles(string directory, string pattern)
         {
-            return EnumerateFiles(directory, pattern: pattern, includeDeleted: false, orderByDate: false);
+            return EnumerateFiles(directory, pattern: pattern, includeDeleted: false, orderByDate: false, singlePackage: null);
         }
 
         public static IEnumerable<Blob> EnumerateFiles(string directory, bool includeDeleted)
         {
-            return EnumerateFiles(directory, includeDeleted: true, orderByDate: false);
+            return EnumerateFiles(directory, includeDeleted: true, orderByDate: false, singlePackage: null);
         }
 
-        public static IEnumerable<Blob> EnumerateFiles(string directory, string pattern, bool includeDeleted, bool orderByDate)
+        public static IEnumerable<Blob> EnumerateFiles(string directory, string pattern, bool includeDeleted, bool orderByDate, Stream singlePackage)
         {
             if (pattern == "*") pattern = null;
             string prefix = null;
@@ -164,17 +219,19 @@ namespace Shaman.Runtime
                 prefix = pattern.Substring(0, star);
                 suffix = pattern.Substring(star + 1);
             }
-            var items = EnumerateFiles(directory, includeDeleted: includeDeleted, orderByDate: orderByDate);
-            if(pattern!=null) items = items.Where(x => x.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && x.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+            var items = EnumerateFiles(directory, includeDeleted: includeDeleted, orderByDate: orderByDate, singlePackage: null);
+            if (pattern != null) items = items.Where(x => x.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && x.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
             return items;
         }
-        private static IEnumerable<Blob> EnumerateFiles(string directory, bool includeDeleted, bool orderByDate)
+        private static IEnumerable<Blob> EnumerateFiles(string directory, bool includeDeleted, bool orderByDate, Stream singlePackage)
         {
-            directory = Path.GetFullPath(directory);
-
+            if ((directory == null) == (singlePackage == null)) throw new ArgumentException();
             IEnumerable<string> packages;
-            
-            packages =
+            if (directory != null)
+            {
+                directory = Path.GetFullPath(directory);
+
+                packages =
 #if NET35
             Directory.GetFiles(
 #else
@@ -182,18 +239,22 @@ namespace Shaman.Runtime
 #endif
                 directory, "*.shaman-blobs");
 
-            if (orderByDate)
-            {
-                packages = packages.Select(x => new { Path = x, Date = File.GetCreationTimeUtc(x) }).OrderBy(x => x.Date).Select(x => x.Path);
+                if (orderByDate)
+                {
+                    packages = packages.Select(x => new { Path = x, Date = File.GetCreationTimeUtc(x) }).OrderBy(x => x.Date).Select(x => x.Path);
+                }
+
             }
-
-
+            else
+            {
+                packages = new string[1];
+            }
             foreach (var pkg in packages)
             {
-                using (var fs = File.Open(pkg, FileMode.Open, FileAccess.Read, FileShare.Delete | FileShare.ReadWrite))
+                using (var fs = singlePackage ?? File.Open(pkg, FileMode.Open, FileAccess.Read, FileShare.Delete | FileShare.ReadWrite))
                 {
                     Blob previous = null;
-                    var packagePath = Path.Combine(directory, fs.Name);
+                    var packagePath = pkg;
                     while (true)
                     {
                         var first = fs.ReadByte();
@@ -209,20 +270,20 @@ namespace Shaman.Runtime
                         nl |= ReadByteChecked(fs) << 0;
                         var d = ReadByteChecked(fs);
                         // var wasNameCorrupted = false;
-                       // if (!SupportCorruptedFileNameLengths)
+                        // if (!SupportCorruptedFileNameLengths)
                         {
                             nl |= d << 8;
                         }
-                       /* else
-                        {
-                            if (d != 0)
-                            {
-                                wasNameCorrupted = true;
-                                Console.WriteLine("Fixing corrupted entry...");
-                                fs.Seek(-1, SeekOrigin.Current);
-                                fs.WriteByte(0);
-                            }
-                        }*/
+                        /* else
+                         {
+                             if (d != 0)
+                             {
+                                 wasNameCorrupted = true;
+                                 Console.WriteLine("Fixing corrupted entry...");
+                                 fs.Seek(-1, SeekOrigin.Current);
+                                 fs.WriteByte(0);
+                             }
+                         }*/
 
                         var closedCleanly = ReadByteChecked(fs) == 1;
                         var deleted = ReadByteChecked(fs) == 1;
@@ -235,11 +296,11 @@ namespace Shaman.Runtime
                         var next = fs.Position + len;
                         var blob = new Blob()
                         {
-                            PackageFileName = Path.GetFileName(pkg),
+                            PackageFileName = directory != null ? Path.GetFileName(pkg) : null,
                             PackagePath = packagePath,
                             Length = len,
                             Name = name,
-                            Path = Path.Combine(directory, name),
+                            Path = directory != null ? Path.Combine(directory, name) : null,
                             ClosedCleanly = closedCleanly,
                             DataStartOffset = (int)fs.Position,
                             fileStream = fs,
@@ -254,32 +315,35 @@ namespace Shaman.Runtime
                     if (previous != null) previous.fileStream = null;
                 }
             }
-            var additional = new List<Blob>();
-            lock (_lock)
+            if (directory != null)
             {
-                var dir = GetDirectory(directory);
-
-                foreach (var file in dir.locationsToAdd)
+                var additional = new List<Blob>();
+                lock (_lock)
                 {
-                    FileLocation mostRecent;
-                    dir.locations.TryGetValue(file.BlobName, out mostRecent);
-                    if (mostRecent == file)
+                    var dir = GetDirectory(directory);
+
+                    foreach (var file in dir.locationsToAdd)
                     {
-                        additional.Add(new Blob()
+                        FileLocation mostRecent;
+                        dir.locations.TryGetValue(file.BlobName, out mostRecent);
+                        if (mostRecent == file)
                         {
-                            DataStartOffset = file.DataStartOffset,
-                            PackageFileName = file.PackageFileName,
-                            Name = file.BlobName,
-                            ClosedCleanly = true,
-                            Length = file.Length,
-                            Path = Path.Combine(directory, file.BlobName)
-                        });
+                            additional.Add(new Blob()
+                            {
+                                DataStartOffset = file.DataStartOffset,
+                                PackageFileName = file.PackageFileName,
+                                Name = file.BlobName,
+                                ClosedCleanly = true,
+                                Length = file.Length,
+                                Path = Path.Combine(directory, file.BlobName)
+                            });
+                        }
                     }
                 }
-            }
-            foreach (var item in additional)
-            {
-                yield return item;
+                foreach (var item in additional)
+                {
+                    yield return item;
+                }
             }
         }
 
@@ -287,6 +351,7 @@ namespace Shaman.Runtime
 
         public static Stream OpenRead(string path)
         {
+            if (path == null) throw new ArgumentNullException();
             path = Path.GetFullPath(path);
             var dirpath = Path.GetDirectoryName(path);
             var name = Path.GetFileName(path);
@@ -331,7 +396,7 @@ namespace Shaman.Runtime
             }
         }
 
-        private static int ReadByteChecked(FileStream fs)
+        private static int ReadByteChecked(Stream fs)
         {
             var k = fs.ReadByte();
             if (k == -1) throw new EndOfStreamException();
@@ -349,6 +414,7 @@ namespace Shaman.Runtime
 
         private static BlobPackage AcquireAndWriteHeader(string path)
         {
+            if (path == null) throw new ArgumentNullException();
             path = Path.GetFullPath(path);
             var name = Path.GetFileName(path);
             var dirpath = Path.GetDirectoryName(path);
@@ -455,6 +521,7 @@ namespace Shaman.Runtime
 
         public static void Delete(string path)
         {
+            if (path == null) throw new ArgumentNullException();
             path = Path.GetFullPath(path);
             var blobName = Path.GetFileName(path);
             var dirpath = Path.GetDirectoryName(path);
@@ -475,7 +542,7 @@ namespace Shaman.Runtime
 
                     var oldposition = fs == null ? location.Package.ms.Position : -1;
                     var stream = fs;
-                    if (location.Package != null)
+                    if (fs == null)
                     {
                         stream = location.Package.ms;
                     }
@@ -536,6 +603,7 @@ namespace Shaman.Runtime
 
         public static void MigrateFolder(string folder)
         {
+            if (folder == null) throw new ArgumentNullException();
             folder = Path.GetFullPath(folder);
 #if NET35
             foreach (var file in Directory.GetFiles(folder))
@@ -583,6 +651,7 @@ namespace Shaman.Runtime
 
         public static void FlushDirectory(string path)
         {
+            if (path == null) throw new ArgumentNullException();
             path = Path.GetFullPath(path);
             var dir = GetDirectory(path);
             dir.Flush(false);
