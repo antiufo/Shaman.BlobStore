@@ -2,7 +2,7 @@
  Provides an almost drop-in replacement for `System.IO.File`, optimized for a very large number of small files.
  Data is batched in package files, and can be read sequentially.
 
- ## Usage
+## Usage
  ```csharp
  using Shaman.Runtime;
 
