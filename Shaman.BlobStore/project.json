@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1.3",
+  "version": "1.0.1.9",
   "projectUrl": "http://shaman.io",
   "iconUrl": "http://shaman.io/images/shaman-nuget-icon.png",
   "authors": [
@@ -7,10 +7,14 @@
   ],
   "description": "Provides an almost drop-in replacement for System.IO.File, optimized for a very large number of small files. Data is batched in package files, and can be read sequentially.",
   "compilationOptions": {
-    "keyFile": "ShamanOpenSourceKey.snk"
+    "keyFile": "ShamanOpenSourceKey.snk",
+    "define": [
+      "SHAMAN_BLOBSTORE"
+    ]
   },
   "exclude": [
-    "Properties/AssemblyInfo.cs"
+    "Properties/AssemblyInfo.cs",
+    "Program.cs"
   ],
   "frameworks": {
     "net35": {
@@ -42,6 +46,6 @@
     }
   },
   "dependencies": {
-    "Shaman.Configuration.Metadata": "1.0.1.1"
+    "Shaman.Configuration.Metadata": "1.0.1.2"
   }
 }

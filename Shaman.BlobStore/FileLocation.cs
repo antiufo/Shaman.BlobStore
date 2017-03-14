@@ -11,6 +11,7 @@ namespace Shaman.Runtime
         public string PackageFileName;
         public string BlobName;
         internal BlobPackage Package;
-        internal int Length;
+        internal int? Length;
+        public DateTime? Date;
     }
 }

@@ -4,3 +4,4 @@ obj
 *.user
 *.xproj
 project.lock.json
+Shaman.BlobStore/Program.cs

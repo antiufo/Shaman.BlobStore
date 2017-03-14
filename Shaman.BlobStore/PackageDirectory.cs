@@ -24,13 +24,13 @@ namespace Shaman.Runtime
             {
                 foreach (var pkg in this.availablePackages)
                 {
-                    pkg.WriteToFile();
+                    pkg.WriteToFile(close);
                     if (close) pkg.ms = null;
                 }
                 if (close) availablePackages.Clear();
                 foreach (var pkg in this.busyPackages)
                 {
-                    pkg.WriteToFile();
+                    pkg.WriteToFile(close);
                 }
                 if (this.locationsToAdd.Count != 0)
                 {
@@ -50,6 +50,19 @@ namespace Shaman.Runtime
                             {
                                 bw.Write((byte)0);
                             }
+
+                            bw.Write((byte)0);
+                            var length = (uint)item.Length.Value;
+                            if (item.Date != null) length |= (uint)1 << 31;
+
+                            bw.Write(length);
+
+                            if (item.Date != null)
+                            {
+                                bw.Write(item.Date.Value.Ticks);
+                            }
+
+
                             bw.Write(item.BlobName);
                             bw.Write(item.DataStartOffset);
                         }

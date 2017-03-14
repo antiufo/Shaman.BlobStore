@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading;
 #if !NET35
@@ -10,13 +9,25 @@ using System.Threading.Tasks;
 
 namespace Shaman.Runtime
 {
-    internal class UnseekableStreamWrapper : Stream
+#if SHAMAN_BLOBSTORE
+    internal
+#else
+    public
+#endif
+    class UnseekableStreamWrapper : Stream
     {
         public UnseekableStreamWrapper(Stream stream, long length)
         {
             this.inner = stream;
             this._length = length;
         }
+        
+        public UnseekableStreamWrapper(Stream stream)
+        {
+            this.inner = stream;
+            this._length = -1;
+        }
+        
         private Stream inner;
         private long _length;
         public override bool CanRead
@@ -47,6 +58,7 @@ namespace Shaman.Runtime
         {
             get
             {
+                if (_length == -1) throw new NotSupportedException();
                 return _length;
             }
         }
@@ -84,7 +96,7 @@ namespace Shaman.Runtime
                 origin == SeekOrigin.Current ? Position + offset :
                 origin == SeekOrigin.End ? Length + offset :
                 -1;
-            if (pos < 0 || pos > Length) throw new ArgumentException();
+            if (pos < 0 || (_length != -1 && pos > _length)) throw new ArgumentException();
             if (pos == _position) return _position;
             if (pos < _position) throw new NotSupportedException("Cannot rewind stream.");
             var diff = pos - _position;
