@@ -52,7 +52,9 @@ namespace Shaman.Runtime
                             }
 
                             bw.Write((byte)0);
-                            var length = (uint)item.Length.Value;
+                            var length =
+                                item.DataStartOffset == -1 ? 0 :
+                                (uint)item.Length.Value;
                             if (item.Date != null) length |= (uint)1 << 31;
 
                             bw.Write(length);
