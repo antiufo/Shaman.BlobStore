@@ -42,7 +42,7 @@ namespace Shaman.Runtime
         {
             get
             {
-                return inner.CanSeek;
+                return true;
             }
         }
 
